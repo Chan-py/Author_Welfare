@@ -7,10 +7,11 @@ CACHE_DIR = os.path.join(ROOT, "cache")
 
 
 def load_hypergraph(dataset, data_dir=DATA_DIR):
-    """Read datasets/{dataset}/network.hyp (one paper per non-empty line).
+    """Read datasets/{dataset}/network.hyp (one paper per non-empty line, author ids separated
+    by commas or whitespace; an author listed twice on a paper is counted once).
 
     Returns:
-        edges    : edges[p] = list of authors of paper p (author ids remapped to 0..|V|-1)
+        edges    : edges[p] = list of authors of paper p (author ids remapped to 0..|A|-1)
         node_ids : node_ids[a] = original id of author a
     """
     path = os.path.join(data_dir, dataset, "network.hyp")
@@ -19,7 +20,6 @@ def load_hypergraph(dataset, data_dir=DATA_DIR):
     new_id = {}  # original id -> new id
     with open(path) as f:
         for line in f:
-            # instacart is space-separated, the others comma-separated
             toks = line.replace(",", " ").split()
             if not toks:
                 continue
@@ -29,7 +29,8 @@ def load_hypergraph(dataset, data_dir=DATA_DIR):
                 if v not in new_id:
                     new_id[v] = len(node_ids)
                     node_ids.append(v)
-                edge.append(new_id[v])
+                if new_id[v] not in edge:
+                    edge.append(new_id[v])
             edges.append(edge)
     return edges, node_ids
 
@@ -57,12 +58,12 @@ def peak_memory():
     return _proc_status_bytes("VmHWM:")
 
 
-def cache_path(dataset, t, method, seed=None, cache_dir=CACHE_DIR):
+def cache_path(dataset, c, method, seed=None, cache_dir=CACHE_DIR):
     """Path without extension: {path}.hyp holds the hyperedges, {path}.json the rest.
 
     seed is None for deterministic methods; otherwise it is added as _s{seed}.
     """
-    name = f"{dataset}_t{t}_{method}" + ("" if seed is None else f"_s{seed}")
+    name = f"{dataset}_c{c}_{method}" + ("" if seed is None else f"_s{seed}")
     return os.path.join(cache_dir, name)
 
 

@@ -15,9 +15,9 @@ def degrees(edges, n_nodes):
     return deg
 
 
-def over_cap_authors(deg, t):
-    """A_t as flags: over[a] is True iff d_a > t."""
-    return [d > t for d in deg]
+def over_cap_authors(deg, c):
+    """A_c as flags: over[a] is True iff d_a > c."""
+    return [d > c for d in deg]
 
 
 def paper_weights(edges, deg):
@@ -46,11 +46,11 @@ def papers_of_over_cap(edges, n_nodes, over):
     return papers_of
 
 
-def top_t_trimming(cand, edges, over, w, t):
-    """Top-t trimming (Lemma 3).
+def top_c_trimming(cand, edges, over, w, c):
+    """Top-c trimming (Lemma 3).
 
-    Papers of cand (all outside P0) with the same over-cap author set A_t(p) are parallel;
-    keep only the t heaviest of each such class (ties by paper id). Neither the optimum nor
+    Papers of cand (all outside P0) with the same over-cap author set A_c(p) are parallel;
+    keep only the c heaviest of each such class (ties by paper id). Neither the optimum nor
     the Welfare-Greedy output changes.
 
     Returns the kept papers of cand, in their original order.
@@ -63,27 +63,27 @@ def top_t_trimming(cand, edges, over, w, t):
     kept = set()
     for members in classes.values():
         members.sort(key=lambda p: (-w[p], p))
-        kept.update(members[:t])
+        kept.update(members[:c])
     return [p for p in cand if p in kept]
 
 
-def build_lp(edges, n_nodes, t, trim=False):
-    """Natural LP of AWMSS reduced to the over-cap hypergraph H_t (Lemma 2).
+def build_lp(edges, n_nodes, c, trim=False):
+    """Natural LP of AWMSS reduced to the over-cap hypergraph H_c (Lemma 2).
 
-    max sum_{p in cand} w_p x_p  s.t.  sum_{p in P(a) cand} x_p <= t (a in A_t),  0 <= x <= 1
+    max sum_{p in cand} w_p x_p  s.t.  sum_{p in P(a) ∩ cand} x_p <= c (a in A_c),  0 <= x <= 1
 
-    Papers in P0 are fixed to 1 and contribute the constant W(P0). With trim=True, top-t
+    Papers in P0 are fixed to 1 and contribute the constant W(P0). With trim=True, top-c
     trimming (Lemma 3) removes dominated parallel papers first; the optimum is unchanged.
 
-    Returns a dict with cand (variable -> paper id), c (= w_p of cand), A (|A_t| x |cand|
+    Returns a dict with cand (variable -> paper id), w (= w_p of cand), A (|A_c| x |cand|
     sparse matrix), p0 and base = W(P0).
     """
     deg = degrees(edges, n_nodes)
-    over = over_cap_authors(deg, t)
+    over = over_cap_authors(deg, c)
     w = paper_weights(edges, deg)
     p0, cand = split_p0(edges, over)
     if trim:
-        cand = top_t_trimming(cand, edges, over, w, t)
+        cand = top_c_trimming(cand, edges, over, w, c)
 
     row = {}  # over-cap author -> constraint index
     rows, cols = [], []
@@ -93,24 +93,24 @@ def build_lp(edges, n_nodes, t, trim=False):
                 rows.append(row.setdefault(a, len(row)))
                 cols.append(j)
     A = csr_matrix((np.ones(len(rows)), (rows, cols)), shape=(len(row), len(cand)))
-    return {"cand": cand, "c": np.array([w[p] for p in cand]), "A": A, "p0": p0,
+    return {"cand": cand, "w": np.array([w[p] for p in cand]), "A": A, "p0": p0,
             "base": sum(w[p] for p in p0)}
 
 
-def solve_lp(edges, n_nodes, t, trim=False):
+def solve_lp(edges, n_nodes, c, trim=False):
     """Solve the natural LP relaxation with HiGHS dual simplex (an optimal extreme point).
 
-    Returns (OPT_LP, x) where x[p] is the LP value of every paper (1 for P0, 0 for papers
+    Returns (LP_ICML, x) where x[p] is the LP value of every paper (1 for P0, 0 for papers
     removed by trimming).
     """
-    model = build_lp(edges, n_nodes, t, trim)
+    model = build_lp(edges, n_nodes, c, trim)
     x = [0.0] * len(edges)
     for p in model["p0"]:
         x[p] = 1.0
     if not model["cand"]:
         return model["base"], x
 
-    res = linprog(-model["c"], A_ub=model["A"], b_ub=np.full(model["A"].shape[0], t),
+    res = linprog(-model["w"], A_ub=model["A"], b_ub=np.full(model["A"].shape[0], c),
                   bounds=(0, 1), method="highs-ds")
     if res.status != 0:
         raise RuntimeError(f"LP not solved: {res.message}")
@@ -119,39 +119,39 @@ def solve_lp(edges, n_nodes, t, trim=False):
     return model["base"] - res.fun, x
 
 
-def _solve_01(c, constraints, time_limit=None):
-    """max c.x over x in {0,1}^n subject to constraints, with HiGHS at zero optimality gap.
+def _solve_01(obj, constraints, time_limit=None):
+    """max obj.x over x in {0,1}^n subject to constraints, with HiGHS at zero optimality gap.
 
     Raises if the solver stops before proving optimality (e.g. at time_limit seconds).
     """
     options = {"mip_rel_gap": 0.0}
     if time_limit is not None:
         options["time_limit"] = time_limit
-    res = milp(-c, constraints=constraints, integrality=np.ones(len(c)), bounds=Bounds(0, 1),
+    res = milp(-obj, constraints=constraints, integrality=np.ones(len(obj)), bounds=Bounds(0, 1),
                options=options)
     if res.status != 0:
         raise RuntimeError(f"ILP not solved to optimality: {res.message}")
     return -res.fun, res.x > 0.5
 
 
-def solve_ilp(edges, n_nodes, t, trim=True, time_limit=None):
+def solve_ilp(edges, n_nodes, c, trim=True, time_limit=None):
     """Solve AWMSS exactly as a 0/1 program with the HiGHS MIP solver (zero optimality gap).
 
     Same model as solve_lp with x integral. Trimming (Lemma 3) keeps an optimum, so it is
     on by default to shrink the model.
 
-    Returns (OPT, retained) with retained the sorted ids of the selected papers.
+    Returns (W(S*), retained) with retained the sorted ids of the selected papers.
     """
-    model = build_lp(edges, n_nodes, t, trim)
+    model = build_lp(edges, n_nodes, c, trim)
     if not model["cand"]:
         return model["base"], sorted(model["p0"])
 
-    value, x = _solve_01(model["c"], LinearConstraint(model["A"], -np.inf, t), time_limit)
+    value, x = _solve_01(model["w"], LinearConstraint(model["A"], -np.inf, c), time_limit)
     chosen = [p for j, p in enumerate(model["cand"]) if x[j]]
     return model["base"] + value, sorted(model["p0"] + chosen)
 
 
-def solve_cardinality_ilp(edges, n_nodes, t, trim=True, time_limit=None, worst=False):
+def solve_cardinality_ilp(edges, n_nodes, c, trim=True, time_limit=None, worst=False):
     """Maximise the number of retained papers exactly, breaking ties by welfare.
 
     Lexicographic two-stage 0/1 program on the same constraints as solve_ilp:
@@ -163,15 +163,15 @@ def solve_cardinality_ilp(edges, n_nodes, t, trim=True, time_limit=None, worst=F
 
     Returns (number of retained papers, retained) with retained sorted.
     """
-    model = build_lp(edges, n_nodes, t, trim and not worst)
+    model = build_lp(edges, n_nodes, c, trim and not worst)
     if not model["cand"]:
         return len(model["p0"]), sorted(model["p0"])
 
     n = len(model["cand"])
-    caps = LinearConstraint(model["A"], -np.inf, t)
+    caps = LinearConstraint(model["A"], -np.inf, c)
     k, _ = _solve_01(np.ones(n), caps, time_limit)
     count = LinearConstraint(np.ones((1, n)), round(k), np.inf)
-    _, x = _solve_01(-model["c"] if worst else model["c"], [caps, count], time_limit)
+    _, x = _solve_01(-model["w"] if worst else model["w"], [caps, count], time_limit)
     chosen = [p for j, p in enumerate(model["cand"]) if x[j]]
     return len(model["p0"]) + len(chosen), sorted(model["p0"] + chosen)
 
@@ -179,7 +179,8 @@ def solve_cardinality_ilp(edges, n_nodes, t, trim=True, time_limit=None, worst=F
 def packing_order(F, oc, x):
     """Edge order of Parekh-Pritchard Algorithm 3 (Chan-Lau ordering).
 
-    F: fractional support (0 < x_p < 1) of an extreme point; oc[p]: over-cap authors of p.
+    F: fractional support (0 < x_p < 1) of an extreme point; oc[p] = A_c(p), the over-cap
+    authors of p.
     Repeatedly take the author with the minimum nonzero degree among the remaining papers
     (ties by author id) and remove its paper with the largest x_p (ties by paper id).
     Returns papers in removal order; they are packed in reverse.
@@ -242,11 +243,11 @@ def modified_packing_step(terms, e, oc, x, load):
         d_new = d_old + x[e]
         if d_old <= 1e-12:
             continue                                   # case (I)
-        c_old, c_new = _ceil(d_old), _ceil(d_new)
-        if c_new == c_old:                             # case (II)
-            blocked.update(i for i, (_, deg, _) in enumerate(terms) if deg.get(v, 0) == c_new)
+        ceil_old, ceil_new = _ceil(d_old), _ceil(d_new)
+        if ceil_new == ceil_old:                       # case (II)
+            blocked.update(i for i, (_, deg, _) in enumerate(terms) if deg.get(v, 0) == ceil_new)
         elif not (_is_int(d_new) or _is_int(d_old)):   # case (III), both non-integral
-            at_ceil = [i for i, (_, deg, _) in enumerate(terms) if deg.get(v, 0) == c_old]
+            at_ceil = [i for i, (_, deg, _) in enumerate(terms) if deg.get(v, 0) == ceil_old]
             # Q_v: mass 1 - x_e of at_ceil; terms already blocked count for free
             need = 1.0 - x[e] - sum(terms[i][2] for i in at_ceil if i in blocked)
             if need > 1e-12:
@@ -265,16 +266,16 @@ def modified_packing_step(terms, e, oc, x, load):
         load[v] = load.get(v, 0.0) + x[e]
 
 
-def over_cap_ranks(edges, deg, t):
-    """|A_t(p)| for every paper p: its number of over-cap authors (d_a > t)."""
-    return [sum(1 for a in authors if deg[a] > t) for authors in edges]
+def over_cap_ranks(edges, deg, c):
+    """|A_c(p)| for every paper p: its number of over-cap authors (d_a > c)."""
+    return [sum(1 for a in authors if deg[a] > c) for authors in edges]
 
 
-def fractional_components(edges, over, x, t, tol=1e-7):
+def fractional_components(edges, over, x, c, tol=1e-7):
     """Structure of the fractional support F = {p : tol < x_p < 1 - tol} of an LP solution (EQ2).
 
     Papers of F are joined through shared over-cap authors whose cap constraint is tight
-    (load = t). For every connected component, the tight authors of each paper are its
+    (load = c). For every connected component, the tight authors of each paper are its
     "tight rank"; if all tight ranks are <= 2 the component is a graph on authors (papers =
     edges, rank-1 papers = pendant half-edges) and its shortest odd cycle is reported.
 
@@ -295,7 +296,7 @@ def fractional_components(edges, over, x, t, tol=1e-7):
             for a in authors:
                 if over[a]:
                     load[a] = load.get(a, 0.0) + x[p]
-    tight = {a for a, v in load.items() if v >= t - 1e-6}
+    tight = {a for a, v in load.items() if v >= c - 1e-6}
     F = [p for p in range(len(edges)) if tol < x[p] < 1 - tol]
     tight_of = {p: [a for a in edges[p] if a in tight] for p in F}
 
@@ -331,7 +332,7 @@ def fractional_components(edges, over, x, t, tol=1e-7):
         comp["paper_odd_cycle"] = _shortest_odd_cycle([ps for ps in frac_of.values() if len(ps) == 2])
         comp["num_authors_over_2"] = sum(len(ps) > 2 for ps in frac_of.values())
         comps.append(comp)
-    comps.sort(key=lambda c: (-len(c["papers"]), c["papers"][0]))
+    comps.sort(key=lambda comp: (-len(comp["papers"]), comp["papers"][0]))
     return comps
 
 
