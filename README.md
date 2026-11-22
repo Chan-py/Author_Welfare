@@ -29,12 +29,25 @@ datasets/        # datasets/{dataset}/network.hyp
 ## Usage
 ```bash
 cd code
-python3 main.py --dataset real/icde2024 --c 5 --method welfare_greedy
-python3 eval.py --dataset real/icde2024 --c 5 --method welfare_greedy --out ../results/results.csv
+python3 main.py --dataset real/iclr2024 --c 5 --method welfare_greedy
+python3 eval.py --dataset real/iclr2024 --c 5 --method welfare_greedy --out ../results/results.csv
 # or both at once
-./run.sh real/icde2024 5 ../results/results.csv welfare_greedy
+./run.sh real/iclr2024 5 ../results/results.csv welfare_greedy
 ```
 
 - `--c`: per-author paper cap *c*
 - `--method`: `welfare_greedy`, `welfare_greedy_trim`, `welfare_reject`, `random_reject` (uses `--seed`), `exact_ilp`, `iterated_packing`, `max_cardinality`, `max_cardinality_worst`
 - Output: `cache/{dataset}_c{c}_{method}.hyp` (retained papers) and `.json` (retained ids, runtime, memory); `eval.py` appends measures (welfare, min retention ratio, # zero-retention authors, W(S) / LP_ICML, ...) to the csv.
+
+## Datasets
+`datasets/real/` contains `iclr2022`–`iclr2026`, `nsf`, and `meetup`.
+
+AMiner is not included because of its size (536 MB).
+
+### AMiner
+
+Source: Arafat et al., "Neighborhood-Based Hypergraph Core Decomposition," PVLDB 2023.
+
+Dataset repository: https://github.com/toggled/vldbsubmission
+
+The AMiner hypergraph can be downloaded from the dataset link provided in the repository's README.
