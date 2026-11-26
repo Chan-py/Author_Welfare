@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(ROOT, "datasets")
@@ -35,27 +36,43 @@ def load_hypergraph(dataset, data_dir=DATA_DIR):
     return edges, node_ids
 
 
-def _proc_status_bytes(key):
-    with open("/proc/self/status") as f:
-        for line in f:
-            if line.startswith(key):
-                return int(line.split()[1]) * 1024  # reported in kB
+# Memory measurement depends on the OS:
+#   Linux  : /proc (exact; the peak is reset before the algorithm runs)
+#   macOS  : resource.getrusage (peak since process start; no reset, so approximate)
+#   Windows: psutil peak working set (peak since process start; no reset, so approximate)
+if sys.platform.startswith("linux"):
+    def _proc_status_bytes(key):
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith(key):
+                    return int(line.split()[1]) * 1024  # reported in kB
 
+    def reset_peak_memory():
+        with open("/proc/self/clear_refs", "w") as f:
+            f.write("5")
 
-def reset_peak_memory():
-    """Reset the process peak RSS (VmHWM) to the current RSS. Linux only."""
-    with open("/proc/self/clear_refs", "w") as f:
-        f.write("5")
+    def current_memory():
+        return _proc_status_bytes("VmRSS:")
 
+    def peak_memory():
+        return _proc_status_bytes("VmHWM:")
 
-def current_memory():
-    """Current resident set size in bytes."""
-    return _proc_status_bytes("VmRSS:")
+else:
+    if sys.platform == "win32":
+        import psutil
 
+        def peak_memory():
+            return psutil.Process().memory_info().peak_wset
+    else:  # macOS
+        import resource
 
-def peak_memory():
-    """Peak resident set size since the last reset, in bytes."""
-    return _proc_status_bytes("VmHWM:")
+        def peak_memory():
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # bytes on macOS
+
+    def reset_peak_memory():
+        pass  # not supported; the peak is measured from process start
+
+    current_memory = peak_memory  # baseline = peak so far (approximation)
 
 
 def cache_path(dataset, c, method, seed=None, cache_dir=CACHE_DIR):

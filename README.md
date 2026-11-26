@@ -3,7 +3,9 @@
 Code for the paper on author welfare under a per-author paper cap *c*.
 
 ## Requirements
-- Python 3.10+, Linux (memory measurement reads `/proc`)
+- Python 3.10+, Linux / macOS / Windows
+  - Memory is measured exactly on Linux (`/proc`); on macOS (`resource`) and Windows (`psutil`) it is approximate (peak since process start minus the peak before the algorithm runs)
+  - On Windows, run `main.py` and `eval.py` directly instead of `run.sh` (or use Git Bash)
 - `pip install -r requirements.txt`
 
 ## Structure
